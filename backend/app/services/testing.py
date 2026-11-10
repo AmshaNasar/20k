@@ -84,15 +84,24 @@ def numbers_in(text: str) -> set[float]:
     return {float(n) for n in _NUMBER_TOKEN.findall(plain)}
 
 
+_ARABIC_ARTICLE = re.compile(r"^(?:ال)(?=[\u0600-\u06FF]{2,}$)")
+
+
+def _present(item: str, text: str) -> bool:
+    """A required word is present. An Arabic word given with the article (الهوية) also counts without it (بطاقة هوية)."""
+    word = _norm(item)
+    return word in text or (bool(_ARABIC_ARTICLE.match(word)) and _ARABIC_ARTICLE.sub("", word) in text)
+
+
 def rule_check(answer: str, expected: dict) -> list[str]:
     """Plain-code checks. Returns the list of problems; empty means the rules pass."""
     text = _norm(answer)
     found = numbers_in(answer)
     problems_n = [f"missing the figure {n}" for n in expected.get("numbers", []) if float(n) not in found]
     problems_n += [f"states {n}, which is not in the table it was given" for n in expected.get("numbers_absent", []) if float(n) in found]
-    problems = problems_n + [f"missing '{item}'" for item in expected.get("must_include", []) if _norm(item) not in text]
+    problems = problems_n + [f"missing '{item}'" for item in expected.get("must_include", []) if not _present(item, text)]
     for group in expected.get("must_include_any", []):
-        if not any(_norm(item) in text for item in group):
+        if not any(_present(item, text) for item in group):
             problems.append(f"none of {group} present")
     problems += [f"contains '{item}'" for item in expected.get("must_not_include", []) if _norm(item) in text]
     labels = expected.get("first_label_any")

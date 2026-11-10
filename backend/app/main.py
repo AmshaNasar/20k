@@ -1,3 +1,4 @@
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -6,6 +7,7 @@ from sqlalchemy import text
 
 from app.config import get_settings
 from app.db import SessionLocal
+from app.llm import is_mock
 from app.routers import assessments, auth, data_sources, evidence, governance, intake, lifecycle, models, org, registry, scenarios
 
 settings = get_settings()
@@ -41,4 +43,5 @@ for module in (auth, org, intake, models, evidence, data_sources, assessments, g
 async def health():
     async with SessionLocal() as session:
         await session.execute(text("select 1"))
-    return {"status": "ok", "environment": settings.environment, "llm_mode": settings.llm_mode}
+    return {"status": "ok", "environment": settings.environment, "llm_mode": "mock" if is_mock() else "live",
+            "commit": os.environ.get("RENDER_GIT_COMMIT", "")[:7] or None}

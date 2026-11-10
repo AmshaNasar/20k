@@ -257,3 +257,10 @@ def test_an_evaluation_cut_off_by_a_restart_can_be_run_again(client, login):
     assert failed["status"] == "failed" and "restart" in failed["summary"]["evaluation"]["errors"]["pipeline"]
     assert client.post(f"/assessments/{created['id']}/evaluate?wait=true", headers=headers).status_code == 202
     assert client.get(f"/assessments/{created['id']}", headers=headers).json()["status"] == "evaluated"
+
+
+def test_arabic_required_words_match_with_or_without_the_article():
+    assert testing.rule_check("المستندات: بطاقة هوية الإمارات، والرسوم ٥٠ درهماً", {"must_include_any": [["50"], ["الهوية"]]}) == []
+    assert testing.rule_check("أحضر الهوية", {"must_include": ["الهوية"]}) == []
+    assert testing.rule_check("لا شيء هنا", {"must_include": ["الهوية"]})
+    assert testing.rule_check("اسمه حمدان", {"must_not_include": ["حمدان"]})  # forbidden words are not loosened
