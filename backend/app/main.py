@@ -1,3 +1,5 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
@@ -8,7 +10,15 @@ from app.routers import assessments, auth, data_sources, evidence, governance, i
 
 settings = get_settings()
 
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    from app.services.evaluation import recover_interrupted
+    await recover_interrupted()
+    yield
+
+
 app = FastAPI(
+    lifespan=lifespan,
     title="AI Model Selection & Governance Agent",
     description="Shared, risk-proportionate path from use case to approved, monitored AI model. Synthetic data only.",
     version="0.5.0",

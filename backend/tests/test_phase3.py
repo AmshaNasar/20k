@@ -238,3 +238,22 @@ def test_live_path_retries_bad_json_and_code_overrules_the_judge(client, login, 
              if "050-555-0142" in r["model_output"]]
     assert leaks and all(r["score"] == 0 and r["notes"].startswith("Rule check failed") for r in leaks)
     assert by_check(assessment)["pii_leakage"]["status"] == "failed"
+
+
+def test_an_evaluation_cut_off_by_a_restart_can_be_run_again(client, login):
+    headers = login(HR_OFFICER)
+    created = client.post("/assessments", headers=headers, json={"use_case_code": "HRL-POLICY-QA", "model_slug": "sahab-flash"}).json()
+
+    async def stall():
+        from app.db import SessionLocal
+        from app.models import Assessment
+        async with SessionLocal() as session:
+            (await session.get(Assessment, created["id"])).status = "evaluating"  # as if the server died mid-run
+            await session.commit()
+        return await evaluation.recover_interrupted()
+
+    assert created["id"] in client.portal.call(stall)
+    failed = client.get(f"/assessments/{created['id']}", headers=headers).json()
+    assert failed["status"] == "failed" and "restart" in failed["summary"]["evaluation"]["errors"]["pipeline"]
+    assert client.post(f"/assessments/{created['id']}/evaluate?wait=true", headers=headers).status_code == 202
+    assert client.get(f"/assessments/{created['id']}", headers=headers).json()["status"] == "evaluated"

@@ -412,6 +412,22 @@ async def run_evaluation(assessment_id: int) -> None:
         raise
 
 
+async def recover_interrupted() -> list[int]:
+    """Run at start-up. An evaluation still 'evaluating' was cut off by a restart or deploy: nothing is running it any more.
+    Mark it failed with the reason, so the department can run it again."""
+    async with SessionLocal() as session:
+        stuck = (await session.execute(select(Assessment).where(Assessment.status == "evaluating"))).scalars().all()
+        for assessment in stuck:
+            assessment.status = "failed"
+            assessment.summary = {**assessment.summary, "evaluation": {
+                **assessment.summary.get("evaluation", {}),
+                "errors": {"pipeline": "Interrupted by a server restart or deploy. Run the evaluation again."}}}
+            session.add(audit_entry("evaluation.interrupted", entity_type="assessment", entity_id=assessment.id,
+                                    assessment_id=assessment.id, details={"reason": "server restart"}))
+        await session.commit()
+        return [a.id for a in stuck]
+
+
 def start_in_background(assessment_id: int) -> None:
     task = asyncio.create_task(run_evaluation(assessment_id))
     _background.add(task)
