@@ -121,3 +121,15 @@ def test_audit_log_is_append_only(client, auth):
         finally:
             session.rollback()
             session.close()
+
+
+def test_a_freshly_seeded_test_bank_needs_no_sync(seeded_database):
+    from app.db import make_sync_session
+    from app.seed.__main__ import sync_test_bank
+
+    session = make_sync_session()
+    try:
+        assert sync_test_bank(session) == {"added": 0, "retired": 0}
+    finally:
+        session.rollback()
+        session.close()

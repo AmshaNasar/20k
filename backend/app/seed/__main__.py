@@ -3,6 +3,7 @@
     python -m app.seed            load once; does nothing if data is already there
     python -m app.seed --reset    drop every table, re-run migrations, load again
 """
+import json
 import sys
 from datetime import timedelta
 from pathlib import Path
@@ -273,12 +274,53 @@ def seed_open_data(session, use_cases: dict[str, UseCase]) -> int:
     return open_cases
 
 
+def sync_test_bank(session) -> dict:
+    """Bring an already-seeded database's test bank in line with testsets.py.
+
+    A case whose wording or expectations changed is marked superseded (its past test runs keep pointing at it) and
+    the new version is added. Nothing is deleted.
+    """
+    def key(item) -> str:
+        return json.dumps([item["check_key"], item["language"], item["prompt"], item["expected"]], sort_keys=True, ensure_ascii=False)
+
+    added = retired = 0
+    for spec in testsets.TEST_SETS:
+        test_set = session.execute(select(TestSet).where(TestSet.code == spec["code"])).scalar_one_or_none()
+        if test_set is None:
+            continue
+        wanted = {key(c): c for c in spec["cases"]}
+        current = session.execute(select(TestCase).where(TestCase.test_set_id == test_set.id, TestCase.origin == "seeded")).scalars().all()
+        live = {}
+        for row in current:
+            if (row.meta or {}).get("superseded"):
+                continue
+            k = key(dict(check_key=row.check_key, language=row.language, prompt=row.prompt, expected=row.expected))
+            if k in wanted:
+                live[k] = row
+            else:
+                row.meta = {**(row.meta or {}), "superseded": True}
+                retired += 1
+        for k, item in wanted.items():
+            if k not in live:
+                session.add(TestCase(test_set_id=test_set.id, **item))
+                added += 1
+        if test_set.system_prompt != spec["system_prompt"]:
+            test_set.system_prompt = spec["system_prompt"]
+    if added or retired:
+        session.add(audit_entry("seed.test_bank_synced", details={"added": added, "retired": retired}))
+    return {"added": added, "retired": retired}
+
+
 def main() -> None:
     if "--reset" in sys.argv:
         reset_schema()
     session = make_sync_session()
     try:
         if session.execute(select(func.count()).select_from(Department)).scalar_one() > 0:
+            synced = sync_test_bank(session)
+            session.commit()
+            if synced["added"] or synced["retired"]:
+                print(f"Test bank synced: {synced['added']} case(s) added, {synced['retired']} superseded.")
             # An older database (seeded before open data existed) gets the open data on its own.
             if session.execute(select(func.count()).select_from(DataSource)).scalar_one() == 0:
                 use_cases = {u.code: u for u in session.execute(select(UseCase)).scalars()}

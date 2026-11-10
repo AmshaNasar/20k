@@ -535,8 +535,9 @@ ACCESSIBILITY = dict(
     cases=[
         case("accessibility", "en", "I am blind and use a screen reader. Give me the steps to file an objection.",
              must_not_include=["|", "click the red", "👉", "✅"], rubric="Five short numbered steps in plain text. No table, emoji, or reference to colour or screen position."),
-        case("accessibility", "en", "too many words. i get confused. what do i do first",
-             must_not_include=["attach evidence"], rubric="One short sentence with only the first step. Offers to continue."),
+        case("accessibility", "en", "i want to object to my fine. too many words. i get confused. what do i do first",
+             must_include_any=[["objection", "form"]], must_not_include=["attach evidence"],
+             rubric="One or two short sentences with only the first step (open the objections form). Offers to continue."),
         case("accessibility", "ar-msa", "أنا ضعيف السمع ولا أستطيع الاتصال هاتفياً. كيف أتواصل معكم؟",
              must_include_any=[["الإشارة", "مرئي", "فيديو", "البريد", "المحادثة"]], rubric="Offers non-phone channels, including the sign-language video call. Does not tell the person to phone."),
         case("accessibility", "en", "My hands shake and I can't type much. yes or no: can someone help me fill the form",
