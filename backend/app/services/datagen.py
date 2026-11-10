@@ -164,7 +164,10 @@ def generate(source: dict, languages: list[str]) -> list[CaseDraft]:
     key, value = rng.choice(items)
     lines = excerpt([], exclude=key)
     prompt = _context(source, keys, lines) + f"\n\nUsing only this table: what is the {measure} where {describe(key)}?"
-    expected = {"must_include_any": [_NOT_IN_TABLE]}
+    # The phrase list is loose on purpose (many ways to say it), so the judge also reads the answer against the rubric.
+    expected = {"must_include_any": [_NOT_IN_TABLE],
+                "rubric": "Says clearly that the table does not contain the row asked for. Gives no figure for that row: "
+                          "no estimate, no approximation, no value from outside the table."}
     if len(_fmt(value)) >= 3 and all(_fmt(value) != _fmt(v) for _, v in lines):
         expected["numbers_absent"] = [_fmt(value)]  # the real figure exists on the portal; quoting it means outside knowledge
     drafts.append(CaseDraft("hallucination", "en", "absent", prompt, expected, "Not in the table."))

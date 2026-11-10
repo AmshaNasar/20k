@@ -12,7 +12,7 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import catalog
+from app import catalog, llm
 from app.audit import audit_entry
 from app.models import (
     AgentRun, AIModel, Approval, Assessment, CheckResult, Concern, Department, Deployment, Incident,
@@ -56,7 +56,7 @@ async def _source(session: AsyncSession, assessment: Assessment) -> reuse_engine
             use_case_id=use_case.id, audience_type=use_case.audience_type, data_sensitivity=use_case.data_sensitivity,
             vulnerable_users=use_case.vulnerable_users, risk_tier=assessment.risk_tier, thresholds=use_case.thresholds),
         checks=checks, conditions=approval.conditions if approval else [],
-        deployment_status=deployment.status if deployment else None,
+        deployment_status=deployment.status if deployment else None, synthetic=bool(assessment.is_history),
     )
 
 
@@ -90,7 +90,9 @@ async def compute(session: AsyncSession, use_case: UseCase, version: ModelVersio
     if requested_source_id is not None and requested_source_id not in [c.id for c in candidates]:
         raise HTTPException(422, "The assessment you asked to reuse is not a decided assessment of this model.")
 
-    decisions = [reuse_engine.evaluate(target, version.id, version.version, required, await _source(session, c)) for c in candidates]
+    # Seeded history carries invented scores: usable in mock mode (a demonstration), never with a real model.
+    decisions = [reuse_engine.evaluate(target, version.id, version.version, required, await _source(session, c),
+                                       allow_synthetic=llm.is_mock()) for c in candidates]
     for decision in decisions:
         decision["requested"] = decision["source_assessment_id"] == requested_source_id
 

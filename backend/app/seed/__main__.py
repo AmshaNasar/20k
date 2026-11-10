@@ -306,6 +306,31 @@ def sync_test_bank(session) -> dict:
                 added += 1
         if test_set.system_prompt != spec["system_prompt"]:
             test_set.system_prompt = spec["system_prompt"]
+
+    # Open-data cases are written by code from each table. When that code changes (a new rubric, a new kind of
+    # question), the cases of an existing database are brought in line the same way.
+    from app.services import opendata as opendata_service
+    for link in session.execute(select(UseCaseDataSource)).scalars().all():
+        use_case, ds = session.get(UseCase, link.use_case_id), session.get(DataSource, link.data_source_id)
+        test_set = session.execute(select(TestSet).where(TestSet.code == f"{opendata_service.SET_PREFIX}{use_case.code}")).scalar_one_or_none()
+        if test_set is None:
+            continue
+        fresh = {key(dict(check_key=r.check_key, language=r.language, prompt=r.prompt, expected=r.expected)): r
+                 for r in opendata_service.case_rows(test_set.id, ds, use_case.languages)}
+        kept = set()
+        for row in session.execute(select(TestCase).where(TestCase.test_set_id == test_set.id, TestCase.origin == "bayanat")).scalars().all():
+            if (row.meta or {}).get("superseded") or (row.meta or {}).get("data_source_id") != ds.id:
+                continue
+            k = key(dict(check_key=row.check_key, language=row.language, prompt=row.prompt, expected=row.expected))
+            if k in fresh:
+                kept.add(k)
+            else:
+                row.meta = {**row.meta, "superseded": True}
+                retired += 1
+        for k, row in fresh.items():
+            if k not in kept:
+                session.add(row)
+                added += 1
     if added or retired:
         session.add(audit_entry("seed.test_bank_synced", details={"added": added, "retired": retired}))
     return {"added": added, "retired": retired}

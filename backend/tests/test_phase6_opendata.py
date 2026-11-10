@@ -159,8 +159,23 @@ def test_a_changed_table_rewrites_cases_and_sends_dependent_deployments_back(cli
     rows = full["sample_rows"]  # same columns, fewer rows: a different version of the table
     old_date = date.fromisoformat(detail["last_updated"])
     summariser = client.get("/use-cases/HRL-SUMM", headers=headers).json()["id"]
-    relying = {d["id"] for d in client.get("/registry/deployments?department=HRL", headers=headers).json()
-               if d["use_case_id"] == summariser and d["status"] in ("active", "under_reassessment", "paused")}
+
+    def live_deployments() -> set:
+        return {d["id"] for d in client.get("/registry/deployments?department=HRL", headers=headers).json()
+                if d["use_case_id"] == summariser and d["status"] in ("active", "under_reassessment", "paused")}
+
+    relying = live_deployments()
+    if not relying:
+        # Run on its own (without the Phase 4 tests) nothing uses the summariser yet: approve it here, playing the named people.
+        run = client.post("/scenarios/a/run", headers=login(HR_OFFICER)).json()
+        for step in run["human_steps"]:
+            if step["request"].startswith("POST /reviews/"):
+                assert client.post(step["request"].split(" ")[1], headers=login(step["login_as"]),
+                                   json={"status": "no_objection", "comment": "Checked the evidence in my area."}).status_code == 200
+        decided = client.post(f"/assessments/{run['assessment_id']}/decision", headers=login(HR_APPROVER),
+                              json={"decision": "approved", "reason": "Fast-track checks passed; approved for this test."})
+        assert decided.status_code == 200, decided.text
+        relying = live_deployments()
 
     async def same(token, client=None):
         from app.db import SessionLocal

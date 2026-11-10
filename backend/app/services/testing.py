@@ -75,13 +75,18 @@ def _norm(text: str) -> str:
     return text.translate(_ARABIC_DIGITS).casefold()
 
 
-_NUMBER_TOKEN = re.compile(r"(?<![\d.])-?\d+(?:\.\d+)?(?![\d.]*\d)")
+# A hyphen is a minus sign only when it does not join the number to a word or another number ("Dubai-1316", "2024-2025").
+_NUMBER_TOKEN = re.compile(r"(?<![\d.])(?:(?<![\w)])-)?\d+(?:\.\d+)?(?![\d.]*\d)")
+_SPACED_THOUSANDS = re.compile(r"(?<![\d.,])\d{1,3}(?:\s\d{3})+(?!\d|[.,]\d)")
 
 
 def numbers_in(text: str) -> set[float]:
-    """Every number in a text as a value: Arabic-Indic digits and thousands separators are understood."""
+    """Every number in a text as a value: Arabic-Indic digits and thousands separators are understood.
+
+    "1 316" is read both as 1316 and as the separate numbers 1 and 316, because either may be meant."""
     plain = re.sub(r"(?<=\d)[,٬](?=\d{3})", "", _norm(text))
-    return {float(n) for n in _NUMBER_TOKEN.findall(plain)}
+    found = {float(n) for n in _NUMBER_TOKEN.findall(plain)}
+    return found | {float(re.sub(r"\s", "", group)) for group in _SPACED_THOUSANDS.findall(plain)}
 
 
 _ARABIC_ARTICLE = re.compile(r"^(?:ال)(?=[\u0600-\u06FF]{2,}$)")
@@ -90,6 +95,9 @@ _ARABIC_ARTICLE = re.compile(r"^(?:ال)(?=[\u0600-\u06FF]{2,}$)")
 def _present(item: str, text: str) -> bool:
     """A required word is present. An Arabic word given with the article (الهوية) also counts without it (بطاقة هوية)."""
     word = _norm(item)
+    if word.isascii() and word.isalpha() and len(word) <= 3:
+        # A short word must stand on its own: "AI" is not found inside "complaint" or "email".
+        return re.search(rf"(?<![a-z0-9]){re.escape(word)}(?:'?s)?(?![a-z0-9])", text) is not None
     return word in text or (bool(_ARABIC_ARTICLE.match(word)) and _ARABIC_ARTICLE.sub("", word) in text)
 
 

@@ -51,7 +51,8 @@ def data_set_for(use_case: UseCase, own_prompt: str) -> TestSet:
 # ───────────── async helpers (API) ─────────────
 
 async def get_source(session: AsyncSession, key_or_id: str) -> DataSource:
-    query = select(DataSource).where(DataSource.id == int(key_or_id)) if key_or_id.isdigit() else \
+    by_id = key_or_id.isascii() and key_or_id.isdigit() and len(key_or_id) <= 9  # longer than any id: treat as a key, so 404
+    query = select(DataSource).where(DataSource.id == int(key_or_id)) if by_id else \
         select(DataSource).where(DataSource.key == key_or_id.upper())
     ds = (await session.execute(query)).scalar_one_or_none()
     if ds is None:

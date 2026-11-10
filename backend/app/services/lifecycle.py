@@ -422,11 +422,21 @@ async def quarterly_check(session: AsyncSession, user: User) -> dict:
     for deployment in list((await session.execute(select(Deployment).where(Deployment.status.in_(LIVE)).order_by(Deployment.id))).scalars()):
         outcome = await _recheck_compliance(session, deployment)
         before = deployment.compliance_status
-        deployment.compliance_status = outcome["status"]
+        # A deployment sent back or paused after a change (new terms, a breach) is not made compliant again by the
+        # rules alone: the evidence on file may predate the change. It keeps its status until a person has dealt with it.
+        held = outcome["status"] == "compliant" and before != "compliant" and deployment.status != "active"
+        after = before if held else outcome["status"]
+        deployment.compliance_status = after
         problems = ([f"{f['rule']} {f['title']} not met" for f in outcome["blockers"] + outcome["non_compliant"]]
                     + [f"{f['rule']} {f['title']}: evidence missing" for f in outcome["unknown"]]
                     + [f"condition breached: {e['condition']}" for e in outcome["breached_conditions"]])
-        deployment.compliance_note = "Quarterly check: " + ("; ".join(problems) if problems else "every applicable rule met.")
+        if held:
+            deployment.compliance_note = (f"Quarterly check: every applicable rule is met on the evidence on file, but the deployment is "
+                                          f"{deployment.status.replace('_', ' ')} after a change, so it stays '{before.replace('_', ' ')}' "
+                                          "until the reassessment is decided or the named approver resumes it. "
+                                          f"Earlier note: {deployment.compliance_note}")[:1000]
+        else:
+            deployment.compliance_note = "Quarterly check: " + ("; ".join(problems) if problems else "every applicable rule met.")
         deployment.next_review_due = _now() + timedelta(days=REVIEW_INTERVAL_DAYS)
         label = await _label(session, deployment)
         if outcome["blockers"]:
@@ -434,7 +444,7 @@ async def quarterly_check(session: AsyncSession, user: User) -> dict:
         elif outcome["status"] != "compliant":
             await _send_back(session, event, deployment, severity="medium", title=f"Quarterly standards check: {label} is {outcome['status'].replace('_', ' ')}",
                              message=deployment.compliance_note)
-        results.append({"deployment_id": deployment.id, "deployment": label, "before": before, "after": outcome["status"],
+        results.append({"deployment_id": deployment.id, "deployment": label, "before": before, "after": after,
                         "status": deployment.status, "note": deployment.compliance_note, "rules_checked": outcome["rules_checked"]})
     event.payload = {**event.payload, "deployments_checked": len(results),
                      "compliant": sum(r["after"] == "compliant" for r in results)}
@@ -454,19 +464,29 @@ async def scan(session: AsyncSession) -> dict:
         for item in await exit_rules(session, deployment):
             if item["action"] in ("retire", "replace"):
                 found["exit_recommendations"].append({"deployment_id": deployment.id, **item})
-    if found["overdue_reviews"] or found["exit_recommendations"]:
+    # One alert per problem: a scan that finds the same thing again does not alert again while the first alert is not closed.
+    wanted = []
+    for item in found["overdue_reviews"]:
+        deployment = await session.get(Deployment, item["deployment_id"])
+        wanted.append((deployment, "medium", f"Periodic review overdue: {await _label(session, deployment)}",
+                       f"The review was due on {item['due'][:10]}. Run the quarterly standards check."))
+    for item in found["exit_recommendations"]:
+        deployment = await session.get(Deployment, item["deployment_id"])
+        wanted.append((deployment, "high", f"Exit rule {item['rule']} ({item['action']}): {await _label(session, deployment)}",
+                       item["reason"] + " A named person must decide."))
+    new = []
+    for deployment, severity, title, message in wanted:
+        existing = (await session.execute(select(Alert.id).where(Alert.deployment_id == deployment.id, Alert.title == title,
+                                                                 Alert.status != "closed"))).scalars().first()
+        if existing is None:
+            new.append((deployment, severity, title, message))
+    if new:
         event = await record_event(session, "monitor_scan", source=MONITOR,
-                                   payload={ "overdue": len(found["overdue_reviews"]), "exit": len(found["exit_recommendations"])})
-        for item in found["overdue_reviews"]:
-            deployment = await session.get(Deployment, item["deployment_id"])
-            await alert(session, event, deployment.department_id, deployment, severity="medium",
-                        title=f"Periodic review overdue: {await _label(session, deployment)}",
-                        message=f"The review was due on {item['due'][:10]}. Run the quarterly standards check.", action="review")
-        for item in found["exit_recommendations"]:
-            deployment = await session.get(Deployment, item["deployment_id"])
-            await alert(session, event, deployment.department_id, deployment, severity="high",
-                        title=f"Exit rule {item['rule']} ({item['action']}): {await _label(session, deployment)}",
-                        message=item["reason"] + " A named person must decide.", action="review")
+                                   payload={"overdue": len(found["overdue_reviews"]), "exit": len(found["exit_recommendations"]),
+                                            "new_alerts": len(new)})
+        for deployment, severity, title, message in new:
+            await alert(session, event, deployment.department_id, deployment, severity=severity, title=title, message=message,
+                        action="review")
     return found
 
 

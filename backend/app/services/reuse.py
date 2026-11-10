@@ -45,6 +45,7 @@ class Source:
     checks: dict[str, SourceCheck]
     conditions: list = field(default_factory=list)
     deployment_status: str | None = None
+    synthetic: bool = False  # seeded example history: its scores were written for the demonstration, not measured
 
 
 def _label(source: Source) -> str:
@@ -60,8 +61,11 @@ def _blocked(source: Source, required: list[str], rule: str, reason: str) -> dic
     }
 
 
-def evaluate(target: Context, target_version_id: int, target_version: str, required: list[str], source: Source) -> dict:
-    """Compare the new context with one past assessment."""
+def evaluate(target: Context, target_version_id: int, target_version: str, required: list[str], source: Source,
+             allow_synthetic: bool = True) -> dict:
+    """Compare the new context with one past assessment.
+
+    `allow_synthetic=False` (live mode) refuses seeded example history: a real model is never approved on invented scores."""
     # ---- rules that block reuse outright ----
     if source.status not in _APPROVED:
         return _blocked(source, required, "R0",
@@ -76,6 +80,10 @@ def evaluate(target: Context, target_version_id: int, target_version: str, requi
         return _blocked(source, required, "R3",
                         f"{_label(source)} is an internal-only approval. An internal approval never transfers directly to a citizen-facing use: "
                         "the public was not among the people it was tested for.")
+    if source.synthetic and not allow_synthetic:
+        return _blocked(source, required, "R11",
+                        f"{_label(source)} is seeded example history: its scores were written for the demonstration, not measured "
+                        "on the model. With a real model every check runs fresh.")
 
     # ---- rules that force individual checks to run again ----
     forced: dict[tuple[str, str], list[str]] = {}  # (rule, reason) -> checks; one check can be forced by several rules

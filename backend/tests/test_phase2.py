@@ -104,6 +104,10 @@ def test_register_model_then_submit_documents(client, login):
     headers = login(HR_OFFICER)
     created = client.post("/models", headers=headers, json=dict(
         slug="qamar-nano", name="Qamar Nano", provider="Provider E", openrouter_id="example/qamar-nano", version="1.0"))
+    # Provider evidence decides compliance results: an officer cannot write it, a named reviewer can.
+    assert client.post("/models/qamar-nano/versions/1.0/evidence", headers=headers, json={"documents": [
+        dict(title="x", kind="contract", text="Data is processed in the UAE.")]}).status_code == 403
+    headers = login("saeed.almarri@hrl.gov.example")
     assert created.status_code == 201, created.text
     summary = client.get("/models/qamar-nano/versions/1.0/evidence/summary", headers=headers).json()
     assert summary["counts"]["missing"] == len(catalog.EVIDENCE_FIELDS)  # unknown = risk
@@ -141,7 +145,7 @@ def test_an_extraction_whose_quote_is_not_in_the_document_is_discarded(client, l
             field="security_certifications", quote="We hold ISO 27001 certification.", summary="ISO 27001", attributes={})])
 
     monkeypatch.setattr(evidence_service, "_extract", invented)
-    headers = login(HR_OFFICER)
+    headers = login("saeed.almarri@hrl.gov.example")
     result = client.post("/models/rimal-small/versions/3.2/evidence", headers=headers, json={"documents": [
         dict(title="Brochure", kind="marketing", text="Rimal Small is fast and affordable.")]}).json()
     assert result["changes"] == []
@@ -149,7 +153,8 @@ def test_an_extraction_whose_quote_is_not_in_the_document_is_discarded(client, l
 
 
 def test_new_version_starts_with_no_evidence(client, login):
-    headers = login(HR_OFFICER)
+    assert client.post("/models/rimal-small/versions", headers=login(HR_OFFICER), json={"version": "3.3"}).status_code == 403
+    headers = login("saeed.almarri@hrl.gov.example")
     assert client.post("/models/rimal-small/versions", headers=headers, json={"version": "3.3"}).status_code == 201
     versions = {v["version"]: v for v in client.get("/models/rimal-small", headers=headers).json()["versions"]}
     assert versions["3.2"]["status"] == "superseded" and versions["3.3"]["status"] == "current"

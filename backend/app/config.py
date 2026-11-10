@@ -1,11 +1,17 @@
 import json
 from functools import lru_cache
 
+from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_BACKEND = Path(__file__).resolve().parents[1]
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    # Found wherever the app is started from: the repository root's .env, then backend/.env (which wins).
+    # Real environment variables win over both.
+    model_config = SettingsConfigDict(env_file=(_BACKEND.parent / ".env", _BACKEND / ".env"), extra="ignore")
 
     environment: str = "development"
     database_url: str = "postgresql://localhost:5432/tdra_gov"

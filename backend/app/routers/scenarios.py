@@ -181,7 +181,8 @@ async def _run_lifecycle(session: AsyncSession, user: User) -> dict:
 @router.post("/{key}/run")
 async def run(key: str, user: User = Depends(get_current_user), session: AsyncSession = Depends(get_session)):
     """Run one scenario up to the point where named people must act; the response says who and how."""
-    spec = SCENARIOS.get(key.lower())
+    key = key.lower()
+    spec = SCENARIOS.get(key)
     if spec is None:
         raise HTTPException(404, f"Scenarios are {', '.join(SCENARIOS)}")
     if key == "e":
@@ -192,4 +193,4 @@ async def run(key: str, user: User = Depends(get_current_user), session: AsyncSe
     if department is None or department.code != spec["department"]:
         raise HTTPException(403, f"Scenario ({key}) is run by someone from {spec['department']}, for example {spec['run_as']}: "
                                  "only the department that owns the use case can start its assessment.")
-    return await _run_assessment(session, key.lower(), user)
+    return await _run_assessment(session, key, user)

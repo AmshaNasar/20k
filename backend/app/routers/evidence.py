@@ -16,6 +16,12 @@ router = APIRouter(prefix="/models", tags=["evidence"])
 _NOTHING_YET = "Provider supplied nothing for this field. Unknown is treated as a risk."
 
 
+def _require_evidence_role(user: User, what: str) -> None:
+    """Provider evidence decides compliance results, so the person asking for an assessment cannot write it themselves."""
+    if user.role not in ("admin", "reviewer"):
+        raise HTTPException(403, f"Only a named reviewer or the registry administrator can {what}.")
+
+
 def _blank_evidence(version_id: int) -> list[ProviderEvidence]:
     """A new version starts with every field missing: nothing is assumed from an earlier version."""
     return [ProviderEvidence(model_version_id=version_id, field=field, status="missing", value={}, source="", note=_NOTHING_YET)
@@ -72,6 +78,7 @@ async def register_model(body: ModelIn, user: User = Depends(get_current_user), 
 async def register_version(slug: str, body: VersionIn, user: User = Depends(get_current_user), session: AsyncSession = Depends(get_session)):
     """Record a new provider version. Earlier versions become superseded; their evidence does not carry over.
     Every department using the model gets an alert (lifecycle trigger `new_model_version`)."""
+    _require_evidence_role(user, "register a model version")
     model = await _model(session, slug)
     existing = (await session.execute(select(ModelVersion).where(ModelVersion.model_id == model.id))).scalars().all()
     if any(v.version == body.version for v in existing):
@@ -96,6 +103,7 @@ async def register_version(slug: str, body: VersionIn, user: User = Depends(get_
 async def submit_evidence(slug: str, version: str, body: EvidenceSubmission,
                           user: User = Depends(get_current_user), session: AsyncSession = Depends(get_session)):
     """Submit provider documents. They are converted into the standard format; unsupported and missing claims are flagged."""
+    _require_evidence_role(user, "submit provider evidence")
     model = await _model(session, slug)
     row = await _version(session, model, version)
     documents = [evidence_service.ProviderDocument(**d.model_dump()) for d in body.documents]
@@ -121,6 +129,7 @@ async def evidence_summary(slug: str, version: str, _: User = Depends(get_curren
 async def correct_evidence(slug: str, version: str, field: str, body: EvidenceCorrection,
                            user: User = Depends(get_current_user), session: AsyncSession = Depends(get_session)):
     """A named person sets one field after checking the source. The change and the reason go to the audit log."""
+    _require_evidence_role(user, "set an evidence field")
     if field not in catalog.EVIDENCE_FIELDS:
         raise HTTPException(404, f"'{field}' is not an evidence field")
     model = await _model(session, slug)
