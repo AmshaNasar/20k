@@ -4,7 +4,7 @@ from sqlalchemy import text
 
 from app.config import get_settings
 from app.db import SessionLocal
-from app.routers import assessments, auth, evidence, governance, intake, lifecycle, models, org, registry, scenarios
+from app.routers import assessments, auth, data_sources, evidence, governance, intake, lifecycle, models, org, registry, scenarios
 
 settings = get_settings()
 
@@ -23,7 +23,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-for module in (auth, org, intake, models, evidence, assessments, governance, lifecycle, scenarios, registry):
+for module in (auth, org, intake, models, evidence, data_sources, assessments, governance, lifecycle, scenarios, registry):
     app.include_router(module.router)
 
 

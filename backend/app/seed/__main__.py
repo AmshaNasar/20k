@@ -13,11 +13,11 @@ from app import catalog
 from app.audit import audit_entry
 from app.db import make_sync_session
 from app.models import (
-    AIModel, Approval, Assessment, CheckResult, Concern, DecisionRecord, Department, Deployment,
+    AIModel, Approval, Assessment, CheckResult, Concern, DataSource, DecisionRecord, Department, Deployment,
     Feedback, Incident, Lesson, ManualBaseline, ModelVersion, ProviderEvidence, Review, StepTiming,
-    TestCase, TestSet, UseCase, User,
+    TestCase, TestSet, UseCase, UseCaseDataSource, User,
 )
-from app.seed import org, registry, testsets
+from app.seed import opendata, org, registry, testsets
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 
@@ -237,12 +237,40 @@ def seed(session) -> dict:
         session.add(Feedback(deployment_id=deployment.id, department_id=deployment.department_id,
                              source=source, language=language, text=text, created_at=when))
 
+    open_cases = seed_open_data(session, use_cases)
+
     counts = dict(departments=len(depts), users=len(users), use_cases=len(use_cases), models=len(models),
                   model_versions=len(versions), test_sets=len(testsets.TEST_SETS), test_cases=case_count,
                   past_assessments=len(assessments), deployments=len(deployments), incidents=len(incidents),
-                  lessons=len(registry.LESSONS), feedback=len(registry.FEEDBACK))
+                  lessons=len(registry.LESSONS), feedback=len(registry.FEEDBACK),
+                  open_data_sources=len(opendata.SOURCES), open_data_cases=open_cases)
     session.add(audit_entry("seed.loaded", details=counts))
     return counts
+
+
+def seed_open_data(session, use_cases: dict[str, UseCase]) -> int:
+    """Real open data (Bayanat snapshot) linked to the Use-Case Cards, with test cases computed from it."""
+    from app.services import opendata as opendata_service
+
+    snapshot = opendata.load()
+    open_cases = 0
+    data_sets: dict[str, TestSet] = {}
+    for key, _token, linked, _why in opendata.SOURCES:
+        ds = DataSource(key=key, portal="bayanat", **snapshot[key])
+        session.add(ds)
+        session.flush()
+        for code in linked:
+            use_case = use_cases[code]
+            session.add(UseCaseDataSource(use_case_id=use_case.id, data_source_id=ds.id))
+            if code not in data_sets:
+                own = session.execute(select(TestSet).where(TestSet.code == code)).scalar_one_or_none()
+                data_sets[code] = opendata_service.data_set_for(use_case, own.system_prompt if own else "")
+                session.add(data_sets[code])
+                session.flush()
+            rows = opendata_service.case_rows(data_sets[code].id, ds, use_case.languages)
+            session.add_all(rows)
+            open_cases += len(rows)
+    return open_cases
 
 
 def main() -> None:
@@ -251,6 +279,14 @@ def main() -> None:
     session = make_sync_session()
     try:
         if session.execute(select(func.count()).select_from(Department)).scalar_one() > 0:
+            # An older database (seeded before open data existed) gets the open data on its own.
+            if session.execute(select(func.count()).select_from(DataSource)).scalar_one() == 0:
+                use_cases = {u.code: u for u in session.execute(select(UseCase)).scalars()}
+                added = seed_open_data(session, use_cases)
+                session.add(audit_entry("seed.open_data_added", details={"sources": len(opendata.SOURCES), "test_cases": added}))
+                session.commit()
+                print(f"Added open data: {len(opendata.SOURCES)} Bayanat tables, {added} test cases.")
+                return
             print("Seed data already present; nothing to do. Use --reset to reload.")
             return
         counts = seed(session)

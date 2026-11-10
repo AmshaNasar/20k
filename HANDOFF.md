@@ -1,6 +1,6 @@
 # Handoff: AI Model Selection & Governance Agent (backend)
 
-Written 10 November 2026, after Phase 5 of 5. Project brief: [20K.md](20K.md). Setup and layout: [README.md](README.md).
+Written 10 November 2026, after Phase 5 of 5 and the open-data (Bayanat) layer. Project brief: [20K.md](20K.md). Setup and layout: [README.md](README.md).
 
 ## 1. End goal
 
@@ -33,7 +33,7 @@ A scenario call runs everything the system does on its own and **stops where a n
 
 ## 3. What is built
 
-74 automated tests pass against a local Postgres (52 from Phases 1–3, 11 for Phase 4, 11 for Phase 5).
+85 automated tests pass against a local Postgres (52 from Phases 1–3, 11 for Phase 4, 11 for Phase 5, 11 for open data), plus 1 live test against the real portal (`BAYANAT_LIVE=1`), which also passes.
 
 ### Phases 1–3 (unchanged, summarised)
 
@@ -76,6 +76,29 @@ Schema with an append-only audit log and agent-run log; login by picking a seede
   - **Compliance:** share of live approved deployments whose status is `compliant` at their last check, overall and per model.
   - Operations: open alerts by action, open incidents, deployments by status, LLM cost.
 
+### Open data: Bayanat.ae (hackathon requirement)
+
+The system now tests models on **real UAE government statistics** instead of only invented examples, and watches those tables for changes.
+
+- **7 real tables** from Bayanat, saved as a snapshot in `backend/app/seed/opendata_snapshot.json`, so the seed and tests work offline:
+
+| Key | Table | Publisher | Used by |
+|---|---|---|---|
+| TRF-ACCIDENT-TYPE | Traffic accidents by type of accident 2025 | Ministry of Interior | TRF-ASSIST |
+| TRF-ACCIDENT-CAUSE | Traffic accidents by cause 2025 (Arabic labels) | Ministry of Interior | TRF-ASSIST |
+| SCS-MARRIAGE-GRANT | Marriage grant applications by education and emirate | Ministry of Community Empowerment | SCS-ASSIST |
+| SCS-BIRTHS | UAE births by citizenship, gender and emirate | Ministry of Health and Prevention | SCS-ASSIST |
+| RID-AFFIDAVITS | Affidavits and authentications Q4 2025, by court and type | Ministry of Justice | RID-SUMM |
+| HRL-FEDERAL-EMPLOYEES | Federal government employees by job category and gender | Federal Authority for Government HR | HRL-SUMM |
+| HRL-LABOUR-FORCE-AD | Labour force shares by citizenship, gender, region (percentages) | Statistics Centre Abu Dhabi | HRL-SUMM |
+
+- **Test cases with answers computed by code** (`services/datagen.py`): the model gets an excerpt of the table and a question. Kinds: a lookup, a total it must add up, the highest category, a row deliberately left out (it must say "not in the table", a hallucination test), and the lookup asked in Arabic. "Total" and country-wide rows are dropped so nothing is counted twice; percentages are never added up. Numbers are matched as whole numbers (1,316 = 1316; "13" does not count as "3"). Because the answers are computed, these cases **can fail a check**, like seeded cases and unlike LLM-written ones. 38 cases across the 4 scenario use cases.
+- **Decision record** cites each table used: title, publisher, link, licence link, portal date, version (checksum) and how many of its cases passed. Compliance rule SD-2 now reads "only synthetic or published open data in evaluation".
+- **Monitor** (`POST /data-sources/{key}/refresh`, or `/data-sources/check-updates` for all): fetches the table from the portal. If its content changed, old cases are marked superseded, new ones are written, and every live deployment of a use case relying on it goes back for reassessment (trigger `data_source_change`). If only the portal date changed, departments get an info alert. If the portal is unreachable, the source is marked `unreachable`.
+- **Adding more tables:** `POST /data-sources` (registry admin, with a Bayanat dataset URL), then `POST /use-cases/{code}/data-sources` (owning department) writes cases at once. `GET /data-sources`, `GET /data-sources/{key}` show rows, versions and cases.
+- **How the portal is read** (`services/bayanat.py`): dataset page for metadata and resource list, then the portal's own download endpoint. No key. The documented developer API (`GetDatasetResource`) returned nothing for every id tried, so it is not used. Files vary a lot (banner rows, metadata sheets, sideways tables, PDFs); the table finder handles the first two. Two Residency tables (Golden Residency, Medical Fitness) had layouts it cannot read and were left out.
+- Refresh the snapshot from the live portal: `.venv/bin/python -m app.seed.opendata`. An older database gets the open data by running `python -m app.seed` (it adds it if missing), which Render's start command already does.
+
 ### What the numbers say today (fresh seed, mock mode)
 
 - Seeded history (5 past assessments): **83% time saved** (working hours, the headline; target met). Median 82%; 3 of 5 assessments reach 80% on their own; by tier low 79%, medium 80% (just under), high 84%. The conservative elapsed-clock reading is 49%.
@@ -89,6 +112,8 @@ Schema with an append-only audit log and agent-run log; login by picking a seede
 - **The four OpenRouter model ids are from memory** and may no longer exist.
 - **The compliance checklist is a synthetic paraphrase**, not checked against the actual UAE requirements.
 - **The Arabic test cases have not been reviewed by an Arabic speaker.**
+- **Bayanat parsing is tuned to the 7 chosen tables.** Other tables may need the table finder extended (sideways tables, multi-row headers). Bayanat's terms of use were linked, not read in full: check them before a public demo.
+- **The open-data cases are excerpt-based** (the table is in the prompt). They test reading and not inventing figures; they do not test a model's own knowledge of UAE statistics.
 - **The time-saved figure for this system's own assessments is not real yet:** human review time in tests is milliseconds. It becomes meaningful once real people review over real days.
 
 ## 5. Your to-do list
@@ -151,12 +176,15 @@ To start again from a clean registry: `.venv/bin/python -m app.seed --reset`.
 | **New:** The monitor pauses on its own only for an open high incident, a blocker rule no longer met, or drift >0.10 below threshold; everything else only sends back | `services/lifecycle.py`, `EXIT_RULES` | Pausing a citizen service automatically is a policy choice |
 | **New:** A new version does not stop pinned deployments; they must reassess before switching | `lifecycle.on_new_version` | You may want every deployment sent back on any new version |
 | **New:** Complaint spike: ≥5 in 14 days and ≥2× the previous 90-day rate | `lifecycle.py` constants | Tune once real volumes are known |
+| **New:** Open-data cases count like seeded cases (they can fail a check) and run first within each check | `services/testing.py`, `select_cases` | They make checks stricter for the 4 linked use cases |
+| **New:** Only a content change sends deployments back; a new portal date with identical data is an info alert | `services/opendata.py`, `lifecycle.on_data_source_updated` | You may want any re-publication to trigger reassessment |
 | **New:** Scenario endpoints stop at human steps; tests play the people by logging in as them | `routers/scenarios.py` | Already matches "no code path approves on its own" |
 
 ## 6. Next steps
 
 - **Frontend on Vercel:** intake form, assessment view (tier, reuse reasons, checks, conditions), reviewer inbox (`/reviews/inbox`), approver screen (`/approvals/inbox`, decision record, decision), registry browser, alerts, deployment page with exit rules, metrics.
-- **Scheduling:** `/lifecycle/scan` and `/lifecycle/quarterly-check` run on demand. On Render, add a cron job that calls them.
+- **Scheduling:** `/lifecycle/scan`, `/lifecycle/quarterly-check` and `/data-sources/check-updates` run on demand. On Render, add a cron job that calls them.
+- **Emirate portals** (Abu Dhabi, Dubai, Sharjah, Ajman, RAK, Fujairah): add one adapter each next to `services/bayanat.py`; the `data_sources` table already has a `portal` column.
 - **Before any real use:** real authentication, legal validation of the checklist, larger and reviewed test sets, and a decision on which real models to assess.
 
 ## 7. Where things are
@@ -171,8 +199,10 @@ To start again from a clean registry: `.venv/bin/python -m app.seed --reset`.
 | `backend/app/services/governance.py` | Agents 6 and 7: recommendation, reviewers, concerns, decision record, decision, deployment |
 | `backend/app/services/lifecycle.py` | Agent 8: triggers, alerts, exit rules, incidents, feedback, reassessment |
 | `backend/app/services/metrics.py` | Time saved and compliance |
+| `backend/app/services/bayanat.py`, `datagen.py`, `opendata.py` | Bayanat client, test cases from real tables, open-data registry and update checks |
+| `backend/app/seed/opendata.py`, `opendata_snapshot.json` | The 7 chosen tables and their saved snapshot |
 | `backend/app/routers/governance.py`, `lifecycle.py`, `scenarios.py` | Phase 4 and 5 endpoints, scenario runner |
 | `backend/alembic/versions/0003_governance_and_lifecycle.py` | New columns for reviews, concerns, deployments, alerts |
 | `backend/app/seed/` | Synthetic data |
-| `backend/tests/` | 74 tests, one file per phase |
+| `backend/tests/` | 85 tests (+1 live), one file per phase |
 | `render.yaml` | Render blueprint |

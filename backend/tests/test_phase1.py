@@ -97,8 +97,9 @@ def test_every_use_case_has_a_test_set_with_arabic_and_english(client, auth):
     assert len(use_cases) == 14
     for use_case in use_cases:
         sets = client.get(f"/test-sets?use_case={use_case['code']}", headers=auth).json()
-        assert len(sets) == 1
-        cases = client.get(f"/test-sets/{sets[0]['code']}", headers=auth).json()["cases"]
+        own = [s for s in sets if s["code"] == use_case["code"]]  # plus DATA-<code> when it relies on open data
+        assert len(own) == 1 and all(s["code"] in (use_case["code"], "DATA-" + use_case["code"]) for s in sets)
+        cases = client.get(f"/test-sets/{own[0]['code']}", headers=auth).json()["cases"]
         languages = {c["language"] for c in cases}
         assert "en" in languages and languages & {"ar-msa", "ar-gulf"}
     shared = client.get("/test-sets?shared_only=true", headers=auth).json()

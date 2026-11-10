@@ -20,7 +20,7 @@ from app import catalog, llm
 from app.audit import audit_entry
 from app.models import (
     AIModel, Approval, Assessment, CheckResult, ComplianceFinding, ComplianceRule, Concern, DecisionRecord,
-    Department, Deployment, ModelVersion, Review, StepTiming, UseCase, User,
+    Department, Deployment, ModelVersion, Review, StepTiming, TestCase, TestRun, UseCase, User,
 )
 
 ORCHESTRATOR, APPROVAL_GATE = "governance_orchestrator", "human_approval"
@@ -269,6 +269,20 @@ async def build_record(session: AsyncSession, assessment: Assessment, *, decisio
         limitations.insert(0, "Scores come from mock mode (LLM_MODE=mock), not from the real model. They say nothing about how the model performs.")
     limitations += STANDING_LIMITATIONS
 
+    # Real open data the evaluation used: which published tables, which version, and how the model did on them.
+    from app.services import opendata
+    open_runs = (await session.execute(select(TestRun, TestCase).join(TestCase, TestCase.id == TestRun.test_case_id)
+                                       .where(TestRun.assessment_id == assessment.id, TestCase.origin == "bayanat"))).all()
+    data_sources = []
+    for ds in await opendata.sources_of(session, use_case.id):
+        mine = [(run, case) for run, case in open_runs if case.meta.get("data_source_id") == ds.id]
+        data_sources.append({"key": ds.key, "title": ds.title, "publisher": ds.publisher, "portal": ds.portal, "page_url": ds.page_url,
+                             "licence_url": ds.licence_url, "last_updated": ds.last_updated.isoformat() if ds.last_updated else None,
+                             "version": ds.checksum[:12], "cases_run": len(mine),
+                             "cases_passed": sum(run.passed is True for run, _ in mine)})
+    if data_sources and not open_runs:
+        limitations.append("The open-data test cases for this use case were not run here: the checks they belong to were reused from an earlier assessment.")
+
     content = {
         "reference": assessment.reference,
         "use_case": {"code": use_case.code, "title": use_case.title, "purpose": use_case.purpose},
@@ -285,6 +299,7 @@ async def build_record(session: AsyncSession, assessment: Assessment, *, decisio
                            for finding, rule in findings],
             "provider_evidence": evidence.get("counts", {}),
             "reuse_source": plan.get("source"),
+            "open_data": data_sources,
         },
         "conditions": conditions,
         "concerns": [{"id": c.id, "title": c.title, "severity": c.severity, "status": c.status,

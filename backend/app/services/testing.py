@@ -75,10 +75,22 @@ def _norm(text: str) -> str:
     return text.translate(_ARABIC_DIGITS).casefold()
 
 
+_NUMBER_TOKEN = re.compile(r"(?<![\d.])-?\d+(?:\.\d+)?(?![\d.]*\d)")
+
+
+def numbers_in(text: str) -> set[float]:
+    """Every number in a text as a value: Arabic-Indic digits and thousands separators are understood."""
+    plain = re.sub(r"(?<=\d)[,٬](?=\d{3})", "", _norm(text))
+    return {float(n) for n in _NUMBER_TOKEN.findall(plain)}
+
+
 def rule_check(answer: str, expected: dict) -> list[str]:
     """Plain-code checks. Returns the list of problems; empty means the rules pass."""
     text = _norm(answer)
-    problems = [f"missing '{item}'" for item in expected.get("must_include", []) if _norm(item) not in text]
+    found = numbers_in(answer)
+    problems_n = [f"missing the figure {n}" for n in expected.get("numbers", []) if float(n) not in found]
+    problems_n += [f"states {n}, which is not in the table it was given" for n in expected.get("numbers_absent", []) if float(n) in found]
+    problems = problems_n + [f"missing '{item}'" for item in expected.get("must_include", []) if _norm(item) not in text]
     for group in expected.get("must_include_any", []):
         if not any(_norm(item) in text for item in group):
             problems.append(f"none of {group} present")
@@ -101,7 +113,7 @@ def mock_answer(case: TestCase, slug: str) -> str:
         return f"[mock model] I am not sure about that (case {case.id})."
     expected = case.expected
     parts = [expected["first_label_any"][0] + "."] if expected.get("first_label_any") else []
-    parts += expected.get("must_include", []) + [group[0] for group in expected.get("must_include_any", [])]
+    parts += expected.get("must_include", []) + expected.get("numbers", []) + [group[0] for group in expected.get("must_include_any", [])]
     return (" ".join(parts) + " [mock model]") if parts else "A careful answer that follows the instructions. [mock model]"
 
 
@@ -191,9 +203,11 @@ async def select_cases(session: AsyncSession, use_case, check_key: str, track: s
         .order_by(TestSet.use_case_id.is_(None), TestCase.id))).all()
     rows = [(case, test_set) for case, test_set in rows
             if case.language in use_case.languages
-            and (case.origin == "seeded" or test_set.code == generated_set_code)
+            and (case.origin in ("seeded", "bayanat") or test_set.code == generated_set_code)
+            and not (case.meta or {}).get("superseded")
             and (test_set.use_case_id in (use_case.id, None))]
-    seeded = [r for r in rows if r[0].origin == "seeded"]
+    # Cases computed from real open-data tables count like seeded ones and go first.
+    seeded = [r for r in rows if r[0].origin == "bayanat"] + [r for r in rows if r[0].origin == "seeded"]
     generated = [r for r in rows if r[0].origin == "generated"]
     limit = DEPTH[track]
     if limit is not None and len(seeded) > limit:
@@ -219,7 +233,7 @@ async def run_check(agent: str, assessment_id: int, model, check_key: str, thres
         return run
     run.outcomes = await asyncio.gather(*[
         _run_case(agent, assessment_id, model, test_set.system_prompt, case, run.usage) for case, test_set in cases])
-    seeded = [o.score for o in run.outcomes if o.score is not None and o.case.origin == "seeded"]
+    seeded = [o.score for o in run.outcomes if o.score is not None and o.case.origin in ("seeded", "bayanat")]
     generated = [o.score for o in run.outcomes if o.score is not None and o.case.origin == "generated"]
     extra = {}
     if generated:

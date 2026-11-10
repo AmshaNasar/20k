@@ -202,6 +202,46 @@ async def on_reported_change(session: AsyncSession, trigger_type: str, user: Use
     return {"event_id": event.id, "alerts": [sent.id]}
 
 
+async def on_data_source_updated(session: AsyncSession, ds, change: dict) -> dict:
+    """A published table the service relies on has a new version (trigger `data_source_change`).
+
+    New content: every live deployment of a linked use case goes back for reassessment, and departments with an
+    assessment in progress are told. Only the date changed: recorded and announced, nothing is sent back.
+    """
+    from app.services.opendata import linked_use_cases
+
+    use_cases = await linked_use_cases(session, ds.id)
+    event = await record_event(session, "data_source_change", source=MONITOR,
+                               payload={"data_source": ds.key, "title": ds.title, "publisher": ds.publisher,
+                                        "content_changed": change["content_changed"], "before": change["before"],
+                                        "after": change["after"], "use_cases": [u.code for u in use_cases]})
+    alerts = []
+    ids = [u.id for u in use_cases]
+    deployments = list((await session.execute(select(Deployment).where(Deployment.use_case_id.in_(ids), Deployment.status.in_(LIVE))
+                                              .order_by(Deployment.id))).scalars()) if ids else []
+    what = f"'{ds.title}' ({ds.publisher}) was updated on the portal"
+    for deployment in deployments:
+        if change["content_changed"]:
+            alerts.append(await _send_back(session, event, deployment, severity="medium",
+                                           title=f"Data source changed: {await _label(session, deployment)}",
+                                           message=f"{what}: {change['before']['rows']} rows before, {change['after']['rows']} now. "
+                                                   "The open-data test cases were rewritten from the new version."))
+        else:
+            alerts.append(await alert(session, event, deployment.department_id, deployment, severity="low",
+                                      title=f"Data source re-dated, content unchanged: {ds.title}",
+                                      message=f"{what}, but the table is identical to the version you were assessed on.", action="info"))
+    if ids and change["content_changed"]:
+        running = (await session.execute(select(Assessment).where(
+            Assessment.use_case_id.in_(ids),
+            Assessment.status.in_(("planned", "evaluating", "evaluated", "in_review", "awaiting_decision"))))).scalars().all()
+        for assessment in running:
+            alerts.append(await alert(session, event, assessment.department_id, None, severity="low",
+                                      title=f"Data source changed while {assessment.reference} is in progress",
+                                      message=f"{what}. Evaluations already run used the earlier version.", action="info"))
+    return {"event_id": event.id, "alerts": [a.id for a in alerts], "deployments_sent_back":
+            [d.id for d in deployments] if change["content_changed"] else []}
+
+
 async def report_incident(session: AsyncSession, user: User, deployment: Deployment, *, title: str, description: str,
                           category: str, severity: str) -> Incident:
     if user.department_id != deployment.department_id:

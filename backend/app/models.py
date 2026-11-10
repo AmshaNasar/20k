@@ -1,7 +1,7 @@
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, false, func, text
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, false, func, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -158,6 +158,47 @@ class CheckResult(Base):
     source: Mapped[str] = mapped_column(default="fresh")  # fresh | reused
     reused_from_assessment_id: Mapped[Optional[int]] = _fk("assessments.id", nullable=True)
     details: Mapped[dict] = mapped_column(default=dict)
+    created_at: Mapped[datetime] = _now()
+
+
+# ---------- Open data sources (Bayanat and, later, the emirate portals) ----------
+
+class DataSource(Base):
+    """A published open-data table, saved as a snapshot so tests are repeatable and work offline."""
+    __tablename__ = "data_sources"
+    __table_args__ = (UniqueConstraint("portal", "file_ref"),)
+    id: Mapped[int] = _pk()
+    key: Mapped[str] = mapped_column(String(48), unique=True)  # short readable id, e.g. TRF-ACCIDENT-TYPE
+    portal: Mapped[str] = mapped_column(default="bayanat")
+    portal_token: Mapped[str]  # dataset id on the portal
+    title: Mapped[str]
+    publisher: Mapped[str] = mapped_column(default="")
+    topics: Mapped[list] = mapped_column(default=list)
+    page_url: Mapped[str]
+    licence_url: Mapped[str] = mapped_column(default="")
+    last_updated: Mapped[Optional[date]] = mapped_column(Date)  # as shown on the portal
+    resource_name: Mapped[str] = mapped_column(default="")
+    file_ref: Mapped[str]  # stable link of the file the snapshot came from
+    columns: Mapped[list] = mapped_column(default=list)
+    measure: Mapped[str]
+    dimensions: Mapped[list] = mapped_column(default=list)
+    rows: Mapped[list] = mapped_column(default=list)
+    total_rows: Mapped[int] = mapped_column(Integer, default=0)
+    checksum: Mapped[str]
+    fetched_at: Mapped[datetime] = _now()
+    status: Mapped[str] = mapped_column(default="ok")  # ok | unreachable
+    last_error: Mapped[Optional[str]] = mapped_column(Text)
+    history: Mapped[list] = mapped_column(default=list)  # earlier snapshots: last_updated, checksum, rows, fetched_at
+    created_at: Mapped[datetime] = _now()
+
+
+class UseCaseDataSource(Base):
+    __tablename__ = "use_case_data_sources"
+    __table_args__ = (UniqueConstraint("use_case_id", "data_source_id"),)
+    id: Mapped[int] = _pk()
+    use_case_id: Mapped[int] = _fk("use_cases.id")
+    data_source_id: Mapped[int] = _fk("data_sources.id")
+    linked_by_id: Mapped[Optional[int]] = _fk("users.id", nullable=True)
     created_at: Mapped[datetime] = _now()
 
 

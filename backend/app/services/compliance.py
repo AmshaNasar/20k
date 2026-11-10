@@ -119,8 +119,9 @@ def sd1(c: Context) -> Finding:
 
 
 def sd2(c: Context) -> Finding:
-    return Finding("compliant", "Evaluation uses synthetic test sets only; no real government data is sent to the model during assessment.",
-                   ["registry:test_sets (synthetic)"])
+    return Finding("compliant", "Evaluation uses synthetic test sets and published open-data statistics (Bayanat.ae) only. "
+                               "No personal or confidential government data is sent to the model during assessment.",
+                   ["registry:test_sets (synthetic)", "registry:data_sources (published open data)"])
 
 
 def sd3(c: Context) -> Finding:
@@ -339,7 +340,7 @@ RULES = [
     Rule("DR-1", "data_residency", "Personal data stays in-country", "Personal data is processed in the UAE or under a contractual residency commitment.", _DP, "blocker", dr1),
     Rule("DR-2", "data_residency", "No provider retention or training", "The provider does not train on the data and does not keep personal data.", _DP, "blocker", dr2),
     Rule("SD-1", "sensitive_data_handling", "Certified security controls", "Personal data is only sent to providers with independently certified security controls.", _DP, "major", sd1),
-    Rule("SD-2", "sensitive_data_handling", "Synthetic data in evaluation", "No real government data is used to evaluate a model.", _GOV, "major", sd2),
+    Rule("SD-2", "sensitive_data_handling", "Only synthetic or published data in evaluation", "No personal or confidential government data is used to evaluate a model; published open data is allowed.", _GOV, "major", sd2),
     Rule("SD-3", "sensitive_data_handling", "Provider safety evaluation", "High-risk uses rely on a provider that has evaluated the model against misuse.", _GOV, "minor", sd3),
     Rule("HO-1", "human_oversight", "Oversight fits the risk tier", "Human oversight is proportionate to the risk tier.", _GOV, "blocker", ho1),
     Rule("HO-2", "human_oversight", "A human makes the decision", "Decisions that affect people are made by a human, not by the AI.", _GOV, "blocker", ho2),

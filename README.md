@@ -4,7 +4,8 @@ Backend for TDRA Challenge #11 (problems R1–R7). A shared, risk-proportionate 
 definition to risk tier, evidence, parallel evaluation, accountable human approval and monitoring,
 for four synthetic government departments connected through one registry.
 
-All data is synthetic. Department, people, model and provider names are invented.
+Departments, people, models and providers are synthetic and invented. Test data also includes real published
+statistics from Bayanat.ae, the UAE open data portal (aggregate tables, no personal data).
 
 ## Status
 
@@ -15,6 +16,7 @@ All data is synthetic. Department, people, model and provider names are invented
 | 3 | Test runner, three evaluation agents in parallel, compliance checklist, critic | done |
 | 4 | Reviews in parallel, concerns, decision record, human approval, deployments, scenario runner | done |
 | 5 | Lifecycle monitor (triggers, alerts, exit rules, reassessment), incidents, feedback, metrics | done |
+| + | Open data: real Bayanat.ae tables, test cases computed from them, update monitoring | done |
 
 ## Run locally
 
@@ -56,7 +58,7 @@ backend/
                          governance (reviews, decision record, approval), lifecycle (monitor, exit rules), metrics
     routers/             auth, org, intake, models, evidence, assessments, governance, lifecycle, scenarios, registry
     seed/                synthetic data: org, registry history, test sets
-  alembic/               migrations (0001 schema and append-only triggers, 0002 plan, 0003 governance and lifecycle)
+  alembic/               migrations (0001 schema and append-only triggers, 0002 plan, 0003 governance and lifecycle, 0004 open data)
   tests/
 ```
 
