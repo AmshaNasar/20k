@@ -68,6 +68,28 @@ backend/
   (the Vercel URL) in the dashboard. Migrations and the seed run on every start; the seed does nothing if data exists.
 - **Vercel (frontend, later):** point it at the Render URL. Auth is a bearer token in the `Authorization` header.
 
+## Frontend (Almanara)
+
+`frontend/` is the designer's static prototype, unchanged, plus one add-on file, `frontend/js/api.js`, and the one
+`<script>` line that loads it. The page opens on its own sample data. The **Sample data** button in the header lets you
+pick a seeded person and connect; Overview, Departments, Registry and Monitor then show the backend's records, read-only.
+The New use case wizard and its pipeline, the ROI figures and the Monitor's Pause / Re-check buttons are still the
+prototype's own simulation and say so.
+
+Run both locally (the backend allows `http://localhost:5173` by default):
+
+```bash
+cd backend && .venv/bin/uvicorn app.main:app --port 8000
+cd frontend && python3 -m http.server 5173     # then open http://localhost:5173/assurance-with-intro.html
+```
+
+The add-on calls `http://localhost:8000` when the page is opened locally and the Render service otherwise;
+`?api=https://host` points it somewhere else (remembered), and `?sample=1` keeps the sample data.
+
+**Vercel:** set the project's root directory to `frontend` (no build step; `vercel.json` serves the page at `/`).
+Then add the Vercel URL to `CORS_ORIGINS` on the Render service, or set `CORS_ORIGIN_REGEX` to
+`https://.*\.vercel\.app`, or the browser will refuse the calls.
+
 ## Models under test
 
 Registry models have invented names. `openrouter_id` says which OpenRouter endpoint is called when the model is
