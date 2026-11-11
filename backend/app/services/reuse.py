@@ -5,6 +5,7 @@ shaped it is recorded with its reason. Reuse never moves accountability: the che
 describe the new department's own deployment always run fresh.
 """
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 from app import catalog
 
@@ -12,6 +13,8 @@ _TIER = {tier: i for i, tier in enumerate(catalog.RISK_TIERS)}
 _SENSITIVITY = {level: i for i, level in enumerate(catalog.DATA_SENSITIVITY)}
 _APPROVED = ("approved", "approved_with_conditions")
 _REUSABLE_STATUSES = ("passed", "warning")
+# Evidence older than this is not reused: the model behind an API, the test bank and the standards all move on.
+REUSE_MAX_AGE_DAYS = 365
 
 
 @dataclass
@@ -45,6 +48,7 @@ class Source:
     checks: dict[str, SourceCheck]
     conditions: list = field(default_factory=list)
     deployment_status: str | None = None
+    decided_at: datetime | None = None
     synthetic: bool = False  # seeded example history: its scores were written for the demonstration, not measured
 
 
@@ -62,7 +66,7 @@ def _blocked(source: Source, required: list[str], rule: str, reason: str) -> dic
 
 
 def evaluate(target: Context, target_version_id: int, target_version: str, required: list[str], source: Source,
-             allow_synthetic: bool = True) -> dict:
+             allow_synthetic: bool = True, now: datetime | None = None) -> dict:
     """Compare the new context with one past assessment.
 
     `allow_synthetic=False` (live mode) refuses seeded example history: a real model is never approved on invented scores."""
@@ -84,6 +88,13 @@ def evaluate(target: Context, target_version_id: int, target_version: str, requi
         return _blocked(source, required, "R11",
                         f"{_label(source)} is seeded example history: its scores were written for the demonstration, not measured "
                         "on the model. With a real model every check runs fresh.")
+    # Seeded history is a fixed demonstration and has no real age; everything measured in this system does.
+    if not source.synthetic and source.decided_at is not None:
+        age_days = ((now or datetime.now(timezone.utc)) - source.decided_at).days
+        if age_days > REUSE_MAX_AGE_DAYS:
+            return _blocked(source, required, "R12",
+                            f"{_label(source)} was decided {age_days} days ago. Evidence older than {REUSE_MAX_AGE_DAYS} days is not reused: "
+                            "run the checks again.")
 
     # ---- rules that force individual checks to run again ----
     forced: dict[tuple[str, str], list[str]] = {}  # (rule, reason) -> checks; one check can be forced by several rules

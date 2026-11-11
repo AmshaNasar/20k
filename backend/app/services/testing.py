@@ -142,10 +142,11 @@ async def ask_model(model, system_prompt: str, case: TestCase, usage: Usage) -> 
     error = None
     for _ in range(2):
         loop = asyncio.get_running_loop()
-        started = loop.time()
         try:
             async with _CONCURRENCY:
+                started = loop.time()  # after the wait for a free slot: latency is the model's, not the queue's
                 reply = await llm.chat(openrouter_id(model), messages, max_tokens=900)
+                elapsed = loop.time() - started
         except (httpx.HTTPError, RuntimeError, KeyError, IndexError) as exc:
             error = repr(exc)[:300]
             continue
@@ -153,7 +154,7 @@ async def ask_model(model, system_prompt: str, case: TestCase, usage: Usage) -> 
         usage.completion_tokens += reply["completion_tokens"]
         usage.cost_usd += reply["cost_usd"]
         usage.calls += 1
-        return reply["content"], int((loop.time() - started) * 1000), None
+        return reply["content"], int(elapsed * 1000), None
     return "", None, error
 
 
@@ -197,7 +198,8 @@ async def _run_case(agent: str, assessment_id: int, model, system_prompt: str, c
 def _finish(run: CheckRun, threshold: float | None, scored: list[float], extra: dict | None = None) -> CheckRun:
     errors = [o for o in run.outcomes if o.score is None]
     run.details = {"cases": len(run.outcomes), "scored": len(scored), "errors": len(errors),
-                   "failed_case_ids": [o.case.id for o in run.outcomes if o.score is not None and o.score < 1],
+                   # Only cases that count towards the score. LLM-written cases are advisory and listed apart.
+                   "failed_case_ids": [o.case.id for o in run.outcomes if o.score is not None and o.score < 1 and o.case.origin != "generated"],
                    **(extra or {})}
     if not scored or len(errors) > 0.3 * len(run.outcomes):
         run.status = "error"
@@ -254,7 +256,9 @@ async def run_check(agent: str, assessment_id: int, model, check_key: str, thres
     generated = [o.score for o in run.outcomes if o.score is not None and o.case.origin == "generated"]
     extra = {}
     if generated:
-        extra["generated_cases"] = {"cases": len(generated), "score": round(sum(generated) / len(generated), 3)}
+        extra["generated_cases"] = {"cases": len(generated), "score": round(sum(generated) / len(generated), 3),
+                                    "failed_case_ids": [o.case.id for o in run.outcomes
+                                                        if o.case.origin == "generated" and o.score is not None and o.score < 1]}
     _finish(run, threshold, seeded, extra)
     # Generated cases never decide pass or fail; a weak result on them is raised as a warning for a reviewer.
     if run.status == "passed" and generated and threshold is not None and extra["generated_cases"]["score"] < threshold:

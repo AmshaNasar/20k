@@ -212,7 +212,7 @@ async def normalise_documents(session: AsyncSession, version: ModelVersion, mode
 
     rows = {row.field: row for row in (await session.execute(
         select(ProviderEvidence).where(ProviderEvidence.model_version_id == version.id))).scalars().all()}
-    changes = []
+    changes, kept = [], []
     for field in catalog.EVIDENCE_FIELDS:
         row = rows.get(field)
         if row is None:
@@ -221,12 +221,16 @@ async def normalise_documents(session: AsyncSession, version: ModelVersion, mode
             session.add(row)
             rows[field] = row
         new = best.get(field)
-        # A document can add or strengthen evidence; it never weakens what is already on file.
-        if new and _STATUS_RANK[new["status"]] >= _STATUS_RANK[row.status]:
+        # A document can add or strengthen evidence; it never weakens what is already on file, and a document of
+        # the same weight does not silently replace it either: that is reported, and a named person decides (PUT).
+        if new and _STATUS_RANK[new["status"]] > _STATUS_RANK[row.status]:
             changes.append({"field": field, "from": row.status, "to": new["status"], "source": new["source"]})
             row.status, row.value, row.source, row.note = new["status"], new["value"], new["source"], new["note"]
+        elif new and new["status"] == row.status and new["source"] != row.source:
+            kept.append({"field": field, "status": row.status, "on_file_from": row.source, "not_applied_from": new["source"],
+                         "reason": "Same weight as the evidence on file. To replace it, a reviewer sets the field after checking both."})
     await session.flush()
-    return {"changes": changes, "discarded_extractions": discarded, "failed_documents": failed_documents,
+    return {"changes": changes, "kept_existing": kept, "discarded_extractions": discarded, "failed_documents": failed_documents,
             "summary": summarise(list(rows.values()))}
 
 

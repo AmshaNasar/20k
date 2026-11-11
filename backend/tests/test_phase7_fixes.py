@@ -100,3 +100,79 @@ def test_quarterly_check_does_not_clear_a_provider_terms_change(client, login):
     assert held and all(r["after"] != "compliant" and r["status"] != "active" for r in held)
     rows = {d["deployment_id"]: d for d in client.get("/metrics", headers=admin).json()["compliance"]["per_deployment"]}
     assert all(rows[i]["compliance_status"] != "compliant" for i in affected)
+
+
+# ───────────── improvements after the audit ─────────────
+
+def test_evidence_older_than_a_year_is_not_reused():
+    from datetime import datetime, timedelta, timezone
+    now = datetime(2027, 6, 1, tzinfo=timezone.utc)
+    context = reuse.Context(use_case_id=1, audience_type="internal", data_sensitivity="internal", vulnerable_users=False,
+                            risk_tier="low", thresholds={})
+    source = reuse.Source(assessment_id=1, reference="ASM-2026-0009", department="HRL", use_case_title="Summariser", status="approved",
+                          model_version_id=7, version="2.0", context=context, decided_at=now - timedelta(days=200),
+                          checks={"hallucination": reuse.SourceCheck(status="passed", score=0.96, origin_assessment_id=1)})
+    assert reuse.evaluate(context, 7, "2.0", ["hallucination"], source, now=now)["outcome"] != "blocked"
+    source.decided_at = now - timedelta(days=reuse.REUSE_MAX_AGE_DAYS + 1)
+    old = reuse.evaluate(context, 7, "2.0", ["hallucination"], source, now=now)
+    assert old["outcome"] == "blocked" and old["reasons"][0]["rule"] == "R12"
+
+
+def test_a_rate_limited_call_waits_and_tries_again(monkeypatch):
+    import asyncio
+
+    import httpx
+
+    from app import llm
+    calls, waits = [], []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        if len(calls) < 3:
+            return httpx.Response(429, headers={"retry-after": "7"} if len(calls) == 1 else {}, json={"error": "slow down"})
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}], "usage": {"prompt_tokens": 3, "completion_tokens": 1, "cost": 0.001}})
+
+    async def no_sleep(seconds):
+        waits.append(seconds)
+
+    async def run():
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        monkeypatch.setattr(llm, "_shared_client", lambda: client)
+        monkeypatch.setattr(llm.asyncio, "sleep", no_sleep)
+        try:
+            return await llm.chat("some/model", [{"role": "user", "content": "hi"}])
+        finally:
+            await client.aclose()
+
+    reply = asyncio.run(run())
+    assert reply["content"] == "ok" and len(calls) == 3
+    assert 7 <= waits[0] < 7.5 and 2 <= waits[1] < 2.5  # the provider's Retry-After first, then the doubling wait
+
+
+def test_a_document_of_equal_weight_does_not_replace_evidence_on_file(client, login):
+    headers = login(HR_SECURITY)
+    first = dict(title="Provider FAQ", kind="documentation", text="Version pinning is available for 12 months.")
+    second = dict(title="Sales email", kind="email", text="Pinning of a snapshot is possible for 3 months only.")
+    url = "/models/najm-mini/versions"
+    version = client.get("/models/najm-mini", headers=headers).json()["versions"][-1]["version"]
+    client.put(f"{url}/{version}/evidence/version_pinning", headers=headers, json=dict(status="missing", value={}, note="Reset for this test."))
+    one = client.post(f"{url}/{version}/evidence", headers=headers, json={"documents": [first]}).json()
+    assert {"version_pinning"} <= {c["field"] for c in one["changes"]}
+    two = client.post(f"{url}/{version}/evidence", headers=headers, json={"documents": [second]}).json()
+    assert "version_pinning" not in {c["field"] for c in two["changes"]}
+    kept = {k["field"]: k for k in two["kept_existing"]}
+    assert kept["version_pinning"]["on_file_from"] == "Provider FAQ" and kept["version_pinning"]["not_applied_from"] == "Sales email"
+
+
+def test_reuse_from_seeded_history_is_labelled_and_reruns_are_counted(client, login):
+    officer = login(HR_OFFICER)
+    started = client.post("/assessments", headers=officer, json={"use_case_code": "HRL-POLICY-QA", "model_slug": "najm-mini"}).json()
+    assert client.post(f"/assessments/{started['id']}/evaluate?wait=true", headers=officer).status_code == 202
+    client.post(f"/assessments/{started['id']}/submit-for-review", headers=officer)
+    record = client.get(f"/assessments/{started['id']}/decision-record", headers=officer).json()["content"]
+    reused = [c for c in record["evidence_used"]["checks"] if c["source"] == "reused"]
+    labelled = any("seeded example history" in line for line in record["limitations"])
+    seeded_ids = {a["id"] for a in client.get("/registry/assessments", headers=officer).json() if a.get("is_history")}
+    assert labelled == any(c["reused_from_assessment_id"] in seeded_ids for c in reused)
+    metrics = client.get("/metrics", headers=officer).json()["time_saved"]
+    assert all(row["evaluation_runs"] >= 0 for row in metrics["per_assessment"]) and "every run" in metrics["how"]

@@ -8,7 +8,9 @@ Cheap models make mistakes, so every call:
 LLM_MODE=mock (or no API key) skips the network and uses the caller's deterministic fallback,
 so the whole system can be run and tested without spending anything.
 """
+import asyncio
 import json
+import random
 import re
 import time
 from collections.abc import Callable
@@ -41,6 +43,39 @@ async def record_run(**fields: Any) -> None:
         await session.commit()
 
 
+# Rate limits and brief provider outages: wait and try again instead of failing the test case at once.
+_RETRY_STATUS = (429, 502, 503, 504)
+RATE_LIMIT_ATTEMPTS = 4
+MAX_WAIT_SECONDS = 20.0
+_client: httpx.AsyncClient | None = None
+_client_loop: asyncio.AbstractEventLoop | None = None
+
+
+def _shared_client() -> httpx.AsyncClient:
+    """One HTTP client (one connection pool) for every call made on the running event loop."""
+    global _client, _client_loop
+    loop = asyncio.get_running_loop()
+    if _client is None or _client.is_closed or _client_loop is not loop:
+        _client, _client_loop = httpx.AsyncClient(limits=httpx.Limits(max_connections=20)), loop
+    return _client
+
+
+async def close_client() -> None:
+    global _client
+    if _client is not None and not _client.is_closed and _client_loop is asyncio.get_running_loop():
+        await _client.aclose()
+    _client = None
+
+
+def _wait_seconds(response: httpx.Response, attempt: int) -> float:
+    """The provider's Retry-After if it gives one, otherwise 1s, 2s, 4s..., with a little jitter; never longer than the cap."""
+    try:
+        wait = float(response.headers.get("retry-after", ""))
+    except ValueError:
+        wait = 2.0 ** attempt
+    return min(max(wait, 0.0), MAX_WAIT_SECONDS) + random.uniform(0, 0.25)
+
+
 async def chat(model: str, messages: list[dict], *, json_mode: bool = False, temperature: float = 0.0,
                max_tokens: int = 2000, timeout: float = 60.0) -> dict:
     """Raw OpenRouter call. Returns {content, prompt_tokens, completion_tokens, cost_usd}."""
@@ -49,12 +84,16 @@ async def chat(model: str, messages: list[dict], *, json_mode: bool = False, tem
                             "max_tokens": max_tokens, "usage": {"include": True}}
     if json_mode:
         body["response_format"] = {"type": "json_object"}
-    async with httpx.AsyncClient(timeout=timeout) as client:
+    client = _shared_client()
+    for attempt in range(RATE_LIMIT_ATTEMPTS):
         response = await client.post(
             f"{settings.openrouter_base_url.rstrip('/')}/chat/completions",
             headers={"Authorization": f"Bearer {settings.openrouter_api_key}"},
-            json=body,
+            json=body, timeout=timeout,
         )
+        if response.status_code not in _RETRY_STATUS or attempt == RATE_LIMIT_ATTEMPTS - 1:
+            break
+        await asyncio.sleep(_wait_seconds(response, attempt))
     response.raise_for_status()
     payload = response.json()
     if "error" in payload:

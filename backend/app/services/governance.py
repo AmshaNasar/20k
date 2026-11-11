@@ -262,6 +262,12 @@ async def build_record(session: AsyncSession, assessment: Assessment, *, decisio
     if reused:
         limitations.append(f"{len(reused)} check(s) were reused from earlier assessments and not re-run here: "
                            + ", ".join(catalog.CHECKS[c.check_key][1] for c in reused) + ".")
+        origins = {c.reused_from_assessment_id for c in reused if c.reused_from_assessment_id}
+        seeded = (await session.execute(select(Assessment.reference).where(Assessment.id.in_(origins), Assessment.is_history.is_(True))
+                                        .order_by(Assessment.id))).scalars().all() if origins else []
+        if seeded:
+            limitations.insert(0, f"Reused scores come from seeded example history ({', '.join(seeded)}): they were written for the "
+                                  "demonstration, not measured on the model. Run the checks fresh before relying on them.")
     for gap in evidence.get("gaps", []):
         if gap["severity"] != "low":
             limitations.append(f"Provider evidence {gap['status']}: {gap['title']}. {gap['risk']}")

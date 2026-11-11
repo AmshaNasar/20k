@@ -56,7 +56,7 @@ async def _source(session: AsyncSession, assessment: Assessment) -> reuse_engine
             use_case_id=use_case.id, audience_type=use_case.audience_type, data_sensitivity=use_case.data_sensitivity,
             vulnerable_users=use_case.vulnerable_users, risk_tier=assessment.risk_tier, thresholds=use_case.thresholds),
         checks=checks, conditions=approval.conditions if approval else [],
-        deployment_status=deployment.status if deployment else None, synthetic=bool(assessment.is_history),
+        deployment_status=deployment.status if deployment else None, synthetic=bool(assessment.is_history), decided_at=assessment.completed_at,
     )
 
 

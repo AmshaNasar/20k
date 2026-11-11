@@ -17,6 +17,8 @@ async def lifespan(_app: FastAPI):
     from app.services.evaluation import recover_interrupted
     await recover_interrupted()
     yield
+    from app import llm
+    await llm.close_client()
 
 
 app = FastAPI(

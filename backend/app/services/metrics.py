@@ -73,6 +73,7 @@ async def compute(session: AsyncSession) -> dict:
         steps: dict[str, float] = {}
         for row in timings.get(assessment.id, []):
             steps[row.step_key] = steps.get(row.step_key, 0.0) + row.duration_seconds
+        runs = sum(1 for row in timings.get(assessment.id, []) if row.step_key == "testing")
         measured = [s for s in catalog.STEPS if s in steps and (s, assessment.risk_tier) in baselines]
         if not measured:
             continue
@@ -85,7 +86,7 @@ async def compute(session: AsyncSession) -> dict:
         per_assessment.append({
             "assessment_id": assessment.id, "reference": assessment.reference, "risk_tier": assessment.risk_tier,
             "track": assessment.track, "status": assessment.status, "seeded_history": assessment.is_history,
-            "steps_measured": measured, "manual_hours": manual, "automated_hours": round(automated, 5),
+            "steps_measured": measured, "evaluation_runs": runs, "manual_hours": manual, "automated_hours": round(automated, 5),
             "human_elapsed_hours": round(human, 4), "human_working_hours": round(human_working, 4),
             "system_hours": round(system, 4), "elapsed_system_hours": round(automated + human, 4), "time_saved": round(1 - system / manual, 4) if manual else None,
             "checks_reused": reuse.get(assessment.id, {}).get("reused", 0), "checks_fresh": reuse.get(assessment.id, {}).get("fresh", 0),
@@ -124,8 +125,10 @@ async def compute(session: AsyncSession) -> dict:
         "time_saved": {
             "how": ("Working hours per step against the seeded manual baseline (also working hours) for the same steps and tier. "
                     "Review and approval are recorded as elapsed clock time and converted to working hours (x 8/24); "
-                    "'elapsed_clock' shows the conservative figure without that conversion. In mock mode the automated "
-                    "timings do not reflect real model latency."),
+                    "'elapsed_clock' shows the conservative figure without that conversion. An assessment evaluated more than once (after a "
+                    "failure or a send-back) counts the time of every run and review round: rework is time really spent, and "
+                    "the manual baseline is for the whole assessment. In mock mode the automated timings do not reflect real "
+                    "model latency."),
             "this_system": _cohort(live),
             "seeded_history": _cohort(history),
             "per_assessment": per_assessment,

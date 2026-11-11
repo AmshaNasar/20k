@@ -137,6 +137,17 @@ Ten bugs found by a live audit were fixed; 97 tests pass (9 new in `backend/test
 
 Still open: exit rule X7 dates a pause from the last monitor event, and a manual pause records none (read in the code, not reproduced).
 
+## 3d. Improvements after the audit (10 Nov 2026)
+
+101 tests pass. Checked live on scenario (b); the rate-limit wait is covered by a test only (no 429 occurred live).
+
+- **Reuse has an age limit:** evidence decided more than 365 days ago is not reused (rule R12, `REUSE_MAX_AGE_DAYS` in `services/reuse.py`). Seeded history is exempt (it is a fixed demonstration, mock mode only), and when it is reused the decision record says first that those scores were not measured.
+- **OpenRouter calls** share one HTTP client and wait on 429/502/503/504 (the provider's Retry-After, else 1s, 2s, 4s; at most 20s, 4 tries) (`llm.py`).
+- **Generated cases:** the rubric may only require what the message or the system's instructions ask for, and judges behaviour, not wording. Their failures are listed apart (`generated_cases.failed_case_ids`); `failed_case_ids` holds only cases that count.
+- **Latency** is measured from when the call starts, not from when it joined the queue (live median fell from about 3.5s to about 1.0s).
+- **Re-runs (decision):** time-saved keeps counting every evaluation run and review round, because rework is time really spent. `/metrics` says so and shows `evaluation_runs` per assessment.
+- **Evidence ties:** a document of the same weight no longer replaces what is on file; the response lists it under `kept_existing` and a reviewer sets the field if it should change.
+
 ## 4. What has not been verified
 
 - **The Render deploy has not been run.** The start command (`alembic upgrade head && python -m app.seed && uvicorn ...`) was run locally against a fresh database with a `postgres://` URL: migrations, seed and `/health` all worked. The Render dashboard side is untested.
