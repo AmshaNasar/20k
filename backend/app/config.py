@@ -40,7 +40,11 @@ class Settings(BaseSettings):
 
     @property
     def cors_origin_list(self) -> list[str]:
-        return [o.strip().rstrip("/") for o in self.cors_origins.split(",") if o.strip()]
+        """The configured origins, plus the local frontend ports, so a local copy of the frontend can always reach this API.
+        Safe because sign-in is a bearer token in a header, never a cookie."""
+        configured = [o.strip().rstrip("/") for o in self.cors_origins.split(",") if o.strip()]
+        local = [f"http://{host}:{port}" for host in ("localhost", "127.0.0.1") for port in (3000, 5173)]
+        return configured + [o for o in local if o not in configured]
 
     @property
     def model_overrides(self) -> dict[str, str]:

@@ -133,3 +133,11 @@ def test_a_freshly_seeded_test_bank_needs_no_sync(seeded_database):
     finally:
         session.rollback()
         session.close()
+
+
+def test_the_local_frontend_is_always_allowed(monkeypatch):
+    from app.config import Settings
+
+    settings = Settings(cors_origins="https://almanara.vercel.app")
+    assert settings.cors_origin_list[0] == "https://almanara.vercel.app"
+    assert {"http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000"} <= set(settings.cors_origin_list)
