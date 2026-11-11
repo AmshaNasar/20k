@@ -25,7 +25,8 @@
   if (params.get("api")) store.set("almanara.api", params.get("api").replace(/\/+$/, ""));
   const local = ["localhost", "127.0.0.1", ""].includes(location.hostname);
   const API = (window.ALMANARA_API || store.get("almanara.api") || (local ? "http://localhost:8000" : DEPLOYED)).replace(/\/+$/, "");
-  const session = { get token() { try { return sessionStorage.getItem("almanara.token") } catch { return null } }, set token(v) { try { v ? sessionStorage.setItem("almanara.token", v) : sessionStorage.removeItem("almanara.token") } catch {} } };
+  const TOKEN_KEY = "almanara.token:" + API;   /* one sign-in per backend: a local token is never sent to the deployed one */
+  const session = { get token() { try { return sessionStorage.getItem(TOKEN_KEY) } catch { return null } }, set token(v) { try { v ? sessionStorage.setItem(TOKEN_KEY, v) : sessionStorage.removeItem(TOKEN_KEY) } catch {} } };
   const live = { on: false, user: null, notes: [], loadedAt: null, evidenceItems: 0 };
 
   async function get(path) {
